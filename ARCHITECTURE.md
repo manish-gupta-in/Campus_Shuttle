@@ -1,8 +1,8 @@
-# ARCHITECTURE.md — BITS Pilani Autonomous Campus Shuttle
+# ARCHITECTURE.md — Autonomous Campus Shuttle
 
 ## System Architecture Overview
 
-This document describes the full technical architecture of the **BITS Pilani Hyderabad Campus Autonomous Shuttle** — an end-to-end autonomous vehicle navigation platform integrating Autoware Universe, ROS 2 Humble, a custom mission FSM node, and a real-time mission control dashboard.
+This document describes the full technical architecture of the **Autonomous Campus Shuttle** — an end-to-end AV navigation platform integrating Autoware Universe, ROS 2 Humble, a custom mission FSM node, and a real-time mission control dashboard.
 
 ---
 
@@ -211,7 +211,7 @@ ARRIVAL EVENT
 MissionControlDashboard (CTk Window, 1460×860)
 │
 ├── Header Bar
-│   ├── BITS WILP Logo (PNG)
+│   ├── Logo (PNG)
 │   ├── Car Asset (JPEG)
 │   ├── Title + Subtitle Labels
 │   ├── Mode Selector (SIMULATION / VEHICLE CONNECT)
@@ -233,7 +233,7 @@ MissionControlDashboard (CTk Window, 1460×860)
 │       └── Operation Mode Badge
 │
 ├── Center Panel (TabView)
-│   ├── Tab 1: BITS PILANI MAP (PCD + OSM)
+│   ├── Tab 1: CAMPUS MAP (PCD + OSM)
 │   │   ├── tk.Canvas (dark #050811 background)
 │   │   ├── Static Layer (PCD points + OSM roads + stop markers)
 │   │   │   ├── 22,000 downsampled pointcloud dots
