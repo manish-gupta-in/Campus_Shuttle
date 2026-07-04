@@ -1,10 +1,6 @@
 # ══════════════════════════════════════════════════════════════
 #  Campus_Shuttle — .gitignore
-#  BITS Pilani Autonomous Shuttle Mission Control
 # ══════════════════════════════════════════════════════════════
-
-# ── Large Binary Map Assets (use Git LFS if needed) ──────────
-map/pointcloud_map.pcd
 
 # ── ROS 2 Workspace Build Artifacts ──────────────────────────
 av_ws/build/
@@ -20,14 +16,12 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.eggs/
 
 # ── Virtual Environments ──────────────────────────────────────
 venv/
 .venv/
 env/
 .env
-*.env
 
 # ── IDE / Editor Files ────────────────────────────────────────
 .vscode/
@@ -38,33 +32,19 @@ env/
 .DS_Store
 Thumbs.db
 
-# ── Jupyter Notebooks ─────────────────────────────────────────
-.ipynb_checkpoints/
-*.ipynb
-
 # ── Test Output / Coverage ────────────────────────────────────
 .pytest_cache/
 .coverage
 htmlcov/
-coverage.xml
-*.junit.xml
 
 # ── Logs & Temporary Files ────────────────────────────────────
 *.log
 terminal.txt
-/tmp/
-
-# ── OS-Specific Files ─────────────────────────────────────────
-.DS_Store
-*.stackdump
 
 # ── ROS colcon / ament specific ───────────────────────────────
 COLCON_IGNORE
 AMENT_IGNORE
-
-# ── System-level rosdep / catkin cruft ───────────────────────
 devel/
-.catkin_workspace
 
-# ── Git LFS Tracking (managed separately via .gitattributes) ─
-# pointcloud_map.pcd tracked by LFS if enabled
+# NOTE: pointcloud_map.pcd (198 MB) is tracked via Git LFS
+# See .gitattributes for LFS configuration

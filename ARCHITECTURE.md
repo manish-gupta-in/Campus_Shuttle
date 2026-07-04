@@ -1,317 +1,323 @@
-# ARCHITECTURE.md — Autonomous Campus Shuttle
+# 📐 Architecture — Autonomous Campus Shuttle
 
-## System Architecture Overview
-
-This document describes the full technical architecture of the **Autonomous Campus Shuttle** — an end-to-end AV navigation platform integrating Autoware Universe, ROS 2 Humble, a custom mission FSM node, and a real-time mission control dashboard.
+> Complete technical reference for the Autonomous Campus Shuttle system.
+> For the quick-start guide, see [WALKTHROUGH.md](WALKTHROUGH.md).
 
 ---
 
-## 1. High-Level Architecture
+## Table of Contents
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                   OPERATOR CONTROL ROOM (UI)                    │
-│                                                                 │
-│   ┌─────────────────────────────────────────────────────────┐   │
-│   │         Mission Control Dashboard (shuttle_dashboard.py) │   │
-│   │                                                         │   │
-│   │  • 3-panel CustomTkinter UI  (1460×860)                 │   │
-│   │  • Sub-ms binary .pcd pointcloud visualizer             │   │
-│   │  • Lanelet2 OSM road overlay parser                     │   │
-│   │  • Live ROS 2 telemetry bridge (direct topic sub)       │   │
-│   │  • Process lifecycle manager (SIM + SHUTTLE nodes)      │   │
-│   │  • Interactive pan/zoom + 3rd-person follower cam       │   │
-│   └──────────────────────────┬──────────────────────────────┘   │
-└─────────────────────────────┼───────────────────────────────────┘
-                              │  ROS 2 DDS (local or remote)
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                  ROS 2 HUMBLE WORKSPACE  (av_ws)                │
-│                                                                 │
-│  ┌────────────────────────────────────────────────────────────┐ │
-│  │         AutowareShuttleMission Node  (shuttle.py)          │ │
-│  │                                                            │ │
-│  │   11-State Finite State Machine:                           │ │
-│  │   INIT → SET_INITIAL_POSE → WAIT_BEFORE_GOAL →            │ │
-│  │   SET_GOAL_POSE → WAIT_AUTONOMOUS_READY →                  │ │
-│  │   SWITCH_AUTONOMOUS → ENGAGE_CONTROL →                     │ │
-│  │   MONITORING_PROGRESS → JUNCTION_STOP →                    │ │
-│  │   RESUME_AFTER_STOP → [loop] / COMPLETE                    │ │
-│  └────────────────────────────┬───────────────────────────────┘ │
-│                               │                                 │
-│  ┌────────────────────────────▼───────────────────────────────┐ │
-│  │              Autoware Universe Planning Suite               │ │
-│  │                                                            │ │
-│  │   • Scenario Planner      • Mission Planner                │ │
-│  │   • NDT/EKF Localizer     • Behavior Planner               │ │
-│  │   • MPC Trajectory Follower                                │ │
-│  └────────────────────────────┬───────────────────────────────┘ │
-│                               │                                 │
-│  ┌────────────────────────────▼───────────────────────────────┐ │
-│  │         Hooke2 DBW / Vehicle Interface (Real Mode)         │ │
-│  │         Simulation Physics Engine (Sim Mode)               │ │
-│  └────────────────────────────────────────────────────────────┘ │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-┌─────────────────────────────▼───────────────────────────────────┐
-│                  ENVIRONMENT & MAP SUBSYSTEM                    │
-│                                                                 │
-│   ┌─────────────────┐  ┌─────────────────┐  ┌───────────────┐  │
-│   │  pointcloud_map │  │  lanelet2_map   │  │  waypoints    │  │
-│   │  .pcd (198 MB)  │  │  .osm (Lnlt2)  │  │  .txt / .py   │  │
-│   └─────────────────┘  └─────────────────┘  └───────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
+1. [System Architecture](#1-system-architecture)
+2. [ROS 2 Topic & Service Map](#2-ros-2-topic--service-map)
+3. [Finite State Machine (FSM)](#3-finite-state-machine-fsm)
+4. [Dual-Trigger Arrival Detection](#4-dual-trigger-arrival-detection)
+5. [Data Flow](#5-data-flow)
+6. [Dashboard Component Breakdown](#6-dashboard-component-breakdown)
+7. [Waypoint Reference (UTM)](#7-waypoint-reference-utm)
+8. [Key Bug Fixes — v4](#8-key-bug-fixes--v4)
+
+---
+
+## 1. System Architecture
+
+The system has four layers: **UI (Dashboard)** → **ROS 2 Mission Node** → **Autoware Planning Stack** → **Vehicle / Simulator**, with the **Map Subsystem** feeding both the dashboard and Autoware.
+
+```mermaid
+graph TD
+    classDef ui     fill:#059669,stroke:#047857,color:#fff
+    classDef core   fill:#7C3AED,stroke:#6D28D9,color:#fff
+    classDef ros    fill:#2563EB,stroke:#1D4ED8,color:#fff
+    classDef map    fill:#D97706,stroke:#B45309,color:#fff
+    classDef hw     fill:#DC2626,stroke:#B91C1C,color:#fff
+
+    subgraph UI["🖥️  Operator Control Room"]
+        Dashboard["Mission Control Dashboard<br/>(shuttle_dashboard.py v7.0)<br/>CustomTkinter · 1460×860px"]:::ui
+    end
+
+    subgraph ROS2["⚙️  ROS 2 Humble Workspace  (av_ws/)"]
+        ShuttleNode["AutowareShuttleMission Node<br/>(shuttle.py  v4)<br/>11-State FSM"]:::core
+        Autoware["Autoware Universe Planning Stack<br/>NDT Localizer · Mission Planner<br/>MPC Trajectory Follower"]:::ros
+    end
+
+    subgraph HW["🚗  Vehicle / Simulation Layer"]
+        DBW["Hooke2 DBW Interface<br/>(Real Vehicle Mode)"]:::hw
+        Sim["Autoware Planning Simulator<br/>(Simulation Mode)"]:::ros
+    end
+
+    subgraph Maps["🗺️  Map Subsystem  (map/)"]
+        PCD["pointcloud_map.pcd<br/>198 MB · 3D LiDAR scan<br/>(Git LFS)"]:::map
+        OSM["lanelet2_map.osm<br/>Lanelet2 vector road network"]:::map
+        WP["WAYPOINTS<br/>UTM coordinates in shuttle.py"]:::map
+    end
+
+    Dashboard -->|"▶ spawn process"| Sim
+    Dashboard -->|"▶ spawn process"| ShuttleNode
+
+    ShuttleNode -->|"/initialpose"| Autoware
+    ShuttleNode -->|"/planning/mission_planning/goal"| Autoware
+    ShuttleNode -->|"/planning/scenario_planning/current_max_velocity"| Autoware
+    ShuttleNode -->|"/control/command/gear_cmd"| DBW
+
+    Autoware -->|"/planning/route_state"| ShuttleNode
+    Autoware -->|"/api/operation_mode/state"| ShuttleNode
+    Autoware -->|"/vehicle/status/velocity_status"| ShuttleNode
+    Autoware -->|"/localization/kinematic_state"| Dashboard
+    Autoware -->|"/vehicle/status/velocity_status"| Dashboard
+    Autoware -->|"/planning/route_state"| Dashboard
+    Autoware -->|"/api/operation_mode/state"| Dashboard
+
+    Autoware <-->|"Sensors + Actuation"| DBW
+    Autoware <-->|"Sim Physics Engine"| Sim
+
+    PCD -->|"Binary byte-seek parse<br/>22K downsampled points"| Dashboard
+    OSM -->|"XML parse + road overlay"| Dashboard
+    WP  -->|"AST parse (zero-exec)"| Dashboard
+    WP  -->|"Goal pose sequence"| ShuttleNode
 ```
 
 ---
 
 ## 2. ROS 2 Topic & Service Map
 
-### Published Topics (by `shuttle.py`)
+### Published by `shuttle.py`
 
 | Topic | Message Type | Purpose |
 |-------|-------------|---------|
-| `/initialpose` | `geometry_msgs/PoseWithCovarianceStamped` | Set AMCL/NDT initial vehicle pose |
-| `/planning/mission_planning/goal` | `geometry_msgs/PoseStamped` | Send next navigation goal |
-| `/planning/scenario_planning/current_max_velocity` | `std_msgs/Float32` | Velocity cap (0.0 m/s during stops) |
-| `/control/command/gear_cmd` | `autoware_vehicle_msgs/GearCommand` | PARK/DRIVE gear commands |
+| `/initialpose` | `geometry_msgs/PoseWithCovarianceStamped` | Set NDT/AMCL initial vehicle pose on map |
+| `/planning/mission_planning/goal` | `geometry_msgs/PoseStamped` | Send next waypoint goal to Autoware planner |
+| `/planning/scenario_planning/current_max_velocity` | `std_msgs/Float32` | Hold velocity at 0.0 m/s during junction stops |
+| `/control/command/gear_cmd` | `autoware_vehicle_msgs/GearCommand` | PARK (one-shot) or DRIVE command to DBW |
 
-### Subscribed Topics (by `shuttle.py`)
+### Subscribed by `shuttle.py`
 
 | Topic | Message Type | Purpose |
 |-------|-------------|---------|
-| `/api/operation_mode/state` | `autoware_adapi_v1_msgs/OperationModeState` | Detect AUTONOMOUS mode |
-| `/planning/route_state` | `autoware_planning_msgs/RouteState` | Detect GOAL_REACHED |
-| `/vehicle/status/velocity_status` | `autoware_vehicle_msgs/VelocityReport` | Real-time speed |
-| `/tf` | TF2 tree | `base_link → map` proximity check |
+| `/api/operation_mode/state` | `autoware_adapi_v1_msgs/OperationModeState` | Detect AUTONOMOUS / MANUAL mode transitions |
+| `/planning/route_state` | `autoware_planning_msgs/RouteState` | Primary arrival trigger (`GOAL_REACHED` = state 6) |
+| `/vehicle/status/velocity_status` | `autoware_vehicle_msgs/VelocityReport` | Real-time vehicle speed |
+| `/tf` | TF2 transform tree | `base_link → map` for fallback proximity check |
 
-### Dashboard Subscriptions (direct bridge, `shuttle_dashboard.py`)
+### Subscribed by `shuttle_dashboard.py` (direct bridge)
 
 | Topic | Purpose |
 |-------|---------|
-| `/localization/kinematic_state` | Real-time X,Y pose + quaternion yaw |
-| `/vehicle/status/velocity_status` | Speed display |
-| `/planning/route_state` | Route state indicator |
+| `/localization/kinematic_state` | Real-time X,Y pose + quaternion → yaw heading |
+| `/vehicle/status/velocity_status` | Speed display (m/s → km/h) |
+| `/planning/route_state` | Route state badge |
 | `/api/operation_mode/state` | AUTONOMOUS / MANUAL mode badge |
 
-### Service Calls (by `shuttle.py`)
+### Service Calls by `shuttle.py`
 
-| Service | Type | Purpose |
-|---------|------|---------|
-| `/api/operation_mode/change_to_autonomous` | `ChangeOperationMode` | Engage autonomous mode |
-| `/api/operation_mode/enable_autoware_control` | `ChangeOperationMode` | Enable Autoware lateral/longitudinal control |
+| Service | Purpose |
+|---------|---------|
+| `/api/operation_mode/change_to_autonomous` | Engage autonomous driving mode (exponential retry backoff) |
+| `/api/operation_mode/enable_autoware_control` | Enable Autoware lateral + longitudinal control |
 
 ---
 
-## 3. Finite State Machine (FSM) — `shuttle.py`
+## 3. Finite State Machine (FSM)
 
+`AutowareShuttleMission` dispatches its FSM handler every **500ms** via `create_timer(0.5, ...)`.
+
+```mermaid
+stateDiagram-v2
+    [*] --> INIT : Node Booted
+
+    INIT --> SET_INITIAL_POSE : 2.0s System Settle
+
+    SET_INITIAL_POSE --> WAIT_BEFORE_GOAL : Publish /initialpose to Map Frame
+
+    WAIT_BEFORE_GOAL --> SET_GOAL_POSE : 15s Warmup + Localisation Delay
+
+    SET_GOAL_POSE --> WAIT_AUTONOMOUS_READY : Publish Next Waypoint Goal Pose
+
+    WAIT_AUTONOMOUS_READY --> SWITCH_AUTONOMOUS : RouteState Settled + Mode Available
+
+    SWITCH_AUTONOMOUS --> ENGAGE_CONTROL : Autonomous Mode Activated
+
+    ENGAGE_CONTROL --> MONITORING_PROGRESS : Autoware Control Enabled
+
+    MONITORING_PROGRESS --> JUNCTION_STOP : Arrived + is_stop == True
+    MONITORING_PROGRESS --> COMPLETE : Arrived + Final Destination Reached
+
+    state JUNCTION_STOP {
+        [*] --> EngageBrakeHold : Vel-cap 0.0 m/s keepalive @ 5 Hz
+        EngageBrakeHold --> ShiftPark : GearCommand PARK  (one-shot · never repeated)
+        ShiftPark --> DwellWait : 10s Passenger Dwell Timer
+    }
+
+    JUNCTION_STOP --> RESUME_AFTER_STOP : Dwell Timer Complete
+
+    state RESUME_AFTER_STOP {
+        [*] --> ShiftDrive : Send GearCommand DRIVE
+        ShiftDrive --> PawlSettle : Wait 2.0s — park pawl physically disengages
+        PawlSettle --> ReleaseVelCap : Release velocity cap → planner free to accelerate
+    }
+
+    RESUME_AFTER_STOP --> SET_GOAL_POSE : Advance Waypoint Index
+
+    COMPLETE --> [*] : Cancel Timers · Safe ROS 2 Shutdown
 ```
-                         ┌─────────┐
-             Node Boot   │  INIT   │  2.0s system settle
-                    ────►│         │──────────────────────►
-                         └─────────┘
-                                             ▼
-                         ┌──────────────────────────────────┐
-                         │       SET_INITIAL_POSE           │
-                         │  Publish /initialpose to map     │
-                         └──────────────┬───────────────────┘
-                                        │
-                                        ▼  15s warmup delay
-                         ┌──────────────────────────────────┐
-                         │        WAIT_BEFORE_GOAL          │
-                         │  Localisation + AMCL convergence │
-                         └──────────────┬───────────────────┘
-                                        │
-                                        ▼
-                         ┌──────────────────────────────────┐
-                         │          SET_GOAL_POSE           │
-                         │  Publish next waypoint goal pose │
-                         └──────────────┬───────────────────┘
-                                        │
-                                        ▼
-                         ┌──────────────────────────────────┐
-                         │      WAIT_AUTONOMOUS_READY       │
-                         │  Wait for route_state SETTLED    │
-                         └──────────────┬───────────────────┘
-                                        │
-                                        ▼
-                         ┌──────────────────────────────────┐
-                         │       SWITCH_AUTONOMOUS          │
-                         │  Call change_to_autonomous srv   │
-                         │  Exponential retry backoff       │
-                         └──────────────┬───────────────────┘
-                                        │
-                                        ▼
-                         ┌──────────────────────────────────┐
-                         │        ENGAGE_CONTROL            │
-                         │  Call enable_autoware_control    │
-                         └──────────────┬───────────────────┘
-                                        │
-                                        ▼
-                         ┌──────────────────────────────────┐
-                    ┌───►│      MONITORING_PROGRESS         │◄──┐
-                    │    │  Monitor via dual-trigger:       │   │
-                    │    │  PRIMARY: RouteState=GOAL_REACHED│   │
-                    │    │  FALLBACK: /tf proximity 5m+5s   │   │
-                    │    └──────────────┬───────────────────┘   │
-                    │                   │  Arrived & is_stop=True│
-                    │                   ▼                       │
-                    │    ┌──────────────────────────────────┐   │
-                    │    │         JUNCTION_STOP            │   │
-                    │    │  • Vel-cap 0.0 m/s @ 5 Hz       │   │
-                    │    │  • PARK gear one-shot            │   │
-                    │    │  • 10s dwell timer               │   │
-                    │    └──────────────┬───────────────────┘   │
-                    │                   │  Dwell complete        │
-                    │                   ▼                       │
-                    │    ┌──────────────────────────────────┐   │
-                    │    │       RESUME_AFTER_STOP          │   │
-                    │    │  Step1: Send DRIVE gear          │   │
-                    │    │  Step2: 2.0s pawl settle wait    │   │
-                    │    │  Step3: Release velocity cap     │   │
-                    │    └──────────────┬───────────────────┘   │
-                    │                   │  Advance waypoint idx  │
-                    └───────────────────┘  → SET_GOAL_POSE      │
-                                        │                       │
-                                        │  Final waypoint reached
-                                        ▼
-                         ┌──────────────────────────────────┐
-                         │           COMPLETE               │
-                         │  Cancel timers, safe shutdown    │
-                         └──────────────────────────────────┘
-```
+
+### FSM State Reference
+
+| State | Timer | Action |
+|-------|-------|--------|
+| `INIT` | 2.0s | System settle before publishing |
+| `SET_INITIAL_POSE` | — | Publish `/initialpose`; latch guard prevents repeat |
+| `WAIT_BEFORE_GOAL` | 15.0s | Wait for NDT localiser to converge |
+| `SET_GOAL_POSE` | — | Publish next waypoint as `PoseStamped` goal |
+| `WAIT_AUTONOMOUS_READY` | 1.5s settle | Poll `route_state ∈ {SET, ARRIVED, FOLLOWING}` + mode OK |
+| `SWITCH_AUTONOMOUS` | Exp. retry | Call `change_to_autonomous` service; backoff 1→16s |
+| `ENGAGE_CONTROL` | — | Call `enable_autoware_control` service |
+| `MONITORING_PROGRESS` | — | Dual-trigger arrival detection (see §4) |
+| `JUNCTION_STOP` | 10.0s dwell | Vel-cap keepalive + PARK gear one-shot |
+| `RESUME_AFTER_STOP` | 2.0s settle | DRIVE gear → pawl settle → release vel-cap |
+| `COMPLETE` | — | Cancel all timers; `rclpy.shutdown()` |
 
 ---
 
 ## 4. Dual-Trigger Arrival Detection
 
-To prevent mission failures from single-point-of-failure route detection:
+Arrival is detected by **two independent mechanisms** — whichever fires first wins.
 
-```
-ARRIVAL EVENT
-      │
-      ├─ PRIMARY TRIGGER ────────────────────────────────────────►
-      │   Autoware RouteState == GOAL_REACHED (state=6)
-      │   Fired by: route_state_callback() → _trigger_arrival()
-      │   Latency: ~100ms after Autoware planner settles
-      │
-      └─ FALLBACK TRIGGER ──────────────────────────────────────►
-          /tf proximity check at 5 Hz (every 0.2s)
-          Conditions:   dist(base_link → goal) ≤ 5.0 m
-                    AND speed ≤ 0.2 m/s
-                    AND confirmed for 5.0 continuous seconds
-          Fired by: proximity_check_callback() → _trigger_arrival()
+```mermaid
+flowchart LR
+    A["🚌 MONITORING_PROGRESS<br/>Vehicle En-Route"] --> B{Arrival<br/>Detected?}
+
+    B -->|"PRIMARY  (route_state_callback)"| C["RouteState == GOAL_REACHED<br/>state = 6<br/>Latency ≈ 100ms"]
+    B -->|"FALLBACK  (proximity_check_callback @ 5 Hz)"| D["dist(base_link → goal) ≤ 5.0 m<br/>AND speed ≤ 0.2 m/s<br/>AND confirmed for 5.0 continuous seconds"]
+
+    C --> E["_trigger_arrival()"]
+    D --> E
+
+    E --> F{"wp is_stop == True?"}
+    F -->|Yes| G["→ JUNCTION_STOP<br/>10s dwell + brake hold"]
+    F -->|No| H["→ COMPLETE<br/>Safe shutdown"]
 ```
 
 ---
 
-## 5. Dashboard Architecture
+## 5. Data Flow
+
+```mermaid
+flowchart TD
+    subgraph Boot ["Boot-time — one-shot parsing"]
+        PCD["pointcloud_map.pcd<br/>198 MB binary file"]
+        PCD -->|"struct.unpack 'fff'<br/>byte-seek stride algorithm"| PCDPTS["22,000 x,y point list<br/>held in memory"]
+
+        OSM["lanelet2_map.osm"]
+        OSM -->|"xml.etree.ElementTree<br/>local_x / local_y node attrs"| WAYS["Road polyline list<br/>held in memory"]
+
+        SRC["shuttle.py source"]
+        SRC -->|"ast.parse + literal_eval<br/>zero-execution safe read"| WPTS["WAYPOINTS dict<br/>auto-synced to source"]
+    end
+
+    subgraph Runtime ["Runtime — 60 FPS render loop"]
+        ROS["ROS 2 Topics<br/>/localization/kinematic_state<br/>/vehicle/status/velocity_status<br/>/planning/route_state<br/>/api/operation_mode/state"]
+        ROS -->|"ROS2Bridge thread<br/>rclpy.spin_once(timeout=0.1)"| TEL["Telemetry State<br/>pose · heading · speed<br/>route_state · op_mode"]
+
+        TEL -->|"Every 16ms"| DYN["Dynamic Canvas Layer<br/>Vehicle capsule + yaw rotation<br/>Route ribbon + sparkles"]
+
+        PCDPTS -->|"First draw / on resize only"| STATIC["Static Canvas Layer<br/>PCD dots · OSM roads<br/>Stop hexagon markers · Grid"]
+        WAYS --> STATIC
+        WPTS --> STATIC
+    end
+
+    STATIC -->|"Composed on tk.Canvas"| CANVAS["🖥️ Map Canvas"]
+    DYN --> CANVAS
+```
+
+---
+
+## 6. Dashboard Component Breakdown
 
 ```
-MissionControlDashboard (CTk Window, 1460×860)
+MissionControlDashboard  (CustomTkinter · 1460 × 860px)
 │
-├── Header Bar
-│   ├── Logo (PNG)
-│   ├── Car Asset (JPEG)
-│   ├── Title + Subtitle Labels
-│   ├── Mode Selector (SIMULATION / VEHICLE CONNECT)
+├── HEADER BAR
+│   ├── Logo image + Car image
+│   ├── "AUTONOMOUS SHUTTLE MISSION CONTROL"  (Courier New · Neon Cyan)
+│   ├── Mode Toggle ── [SIMULATION MODE]  /  [VEHICLE CONNECT MODE]
 │   └── Real-time IST Clock
 │
-├── Left Panel (320px, scrollable)
-│   ├── Mission Routing Section
-│   │   └── Start Stop OptionMenu (dynamic from shuttle.py AST)
-│   ├── Process Runners Section
-│   │   ├── Autoware Simulator Card [▶ LAUNCH / ■ STOP]
-│   │   └── Shuttle Mission Node Card [▶ LAUNCH / ■ STOP]
-│   └── Live Mission Data Section
-│       ├── Speed Gauge (km/h, large display)
-│       ├── Mission State Badge (color-coded)
+├── LEFT PANEL  (320px · scrollable)
+│   ├── MISSION ROUTING
+│   │   └── Start Stop OptionMenu  ← auto-populated via AST parse of shuttle.py
+│   ├── PROCESS RUNNERS
+│   │   ├── Autoware Simulator Card    ▶ LAUNCH / ■ STOP   ● status LED
+│   │   └── Shuttle Mission Node Card  ▶ LAUNCH / ■ STOP   ● status LED
+│   └── LIVE MISSION DATA
+│       ├── Speed (large display, km/h)
+│       ├── Mission State Badge  (color-coded per FSM state)
 │       ├── Waypoint Progress Bar
-│       ├── Current / Next Stop Labels
-│       ├── Route State Indicator
-│       ├── Dwell Timer
-│       └── Operation Mode Badge
+│       ├── Current Stop / Next Stop labels
+│       ├── Route State indicator
+│       ├── Dwell Timer countdown
+│       └── Operation Mode badge  (AUTONOMOUS / MANUAL / LOCAL)
 │
-├── Center Panel (TabView)
-│   ├── Tab 1: CAMPUS MAP (PCD + OSM)
-│   │   ├── tk.Canvas (dark #050811 background)
-│   │   ├── Static Layer (PCD points + OSM roads + stop markers)
-│   │   │   ├── 22,000 downsampled pointcloud dots
-│   │   │   ├── Lanelet2 OSM road polylines
-│   │   │   └── Stop hexagon markers (red/green)
-│   │   ├── Dynamic Layer (re-rendered each frame)
-│   │   │   ├── Active route ribbon (emerald green)
-│   │   │   ├── Wireframe vehicle capsule (cyan)
-│   │   │   ├── LIDAR roof dot (rotating)
-│   │   │   └── Exhaust sparkle particles
-│   │   └── Overlay: "FOLLOW VEHICLE" toggle button
+├── CENTER PANEL  (TabView)
 │   │
-│   └── Tab 2: MISSION LOGS
-│       └── CTkTextbox (color-coded by severity)
+│   ├── Tab 🗺️  CAMPUS MAP  (PCD + OSM)
+│   │   ├── tk.Canvas  (bg #050811 — deep space black)
+│   │   │
+│   │   ├── STATIC LAYER  (cached · redrawn on resize only · ~10ms to build)
+│   │   │   ├── 22,000 pointcloud dots  (slate-cyan · #384a62)
+│   │   │   ├── Lanelet2 OSM road polylines  (slate-gray · #475569)
+│   │   │   └── Stop hexagon markers  (red = junction · green = active)
+│   │   │
+│   │   ├── DYNAMIC LAYER  (redrawn every 16ms under "dynamic" canvas tag)
+│   │   │   ├── Emerald green route ribbon  (active path ahead)
+│   │   │   ├── Cyan wireframe vehicle capsule  (rotates with live yaw)
+│   │   │   ├── Rotating LIDAR roof dot
+│   │   │   └── Exhaust sparkle particles
+│   │   │
+│   │   └── [FOLLOW VEHICLE] floating button  → 3rd-person camera lock
+│   │
+│   └── Tab 💻  MISSION LOGS
+│       └── CTkTextbox  (color-coded: INFO · WARN · ERROR · SYS · ROUTE)
 │
-└── Right Panel (320px)
-    ├── Speed Arc Gauge (canvas drawn)
-    ├── Mission State Label
+└── RIGHT PANEL  (320px)
+    ├── Speed Arc Gauge  (canvas-drawn arc)
+    ├── Mission State label
     ├── Stop Segment Progress Bar
-    ├── Telemetry Cards (Current Stop, Next Stop, Route State)
+    ├── Telemetry cards  (CURRENT STOP · NEXT STOP · ROUTE STATE)
     ├── Dwell Countdown Timer
-    └── Operation Mode Badge
+    └── Operation Mode badge
 ```
 
 ---
 
-## 6. Data Flow Diagram
+## 7. Waypoint Reference (UTM)
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                       DATA FLOW                                 │
-│                                                                 │
-│  [PCD File]  ─── _parse_pcd_points() ──► [22K point list]      │
-│                  (struct.unpack 'fff')     (x, y tuples)        │
-│                                                                 │
-│  [OSM File]  ─── _parse_osm_lanelet() ──► [way polylines]      │
-│                  (xml.etree + local_x/y)  (list of (x,y) lists)│
-│                                                                 │
-│  [shuttle.py] ── AST parser ──────────► [WAYPOINTS dict]       │
-│                  (ast.literal_eval)       (dynamic sync)        │
-│                                                                 │
-│  [ROS 2 Topics] ── ROS2Bridge thread ──► [telemetry dict]      │
-│   /localization/kinematic_state           pose, heading         │
-│   /vehicle/status/velocity_status         speed (m/s)           │
-│   /planning/route_state                   route state string    │
-│   /api/operation_mode/state               mode string           │
-│                                                                 │
-│  [Telemetry Dict] ── _run_render_loop() ──► Canvas redraws     │
-│                      (~60 FPS, 16ms tick)   (dynamic layer only)│
-└─────────────────────────────────────────────────────────────────┘
-```
+All coordinates are in the local UTM frame defined by `map_config.yaml`.
+
+| # | Stop | UTM-X | UTM-Y | Alt (m) | Dwell |
+|---|------|-------|-------|---------|-------|
+| 0 | Security Main Gate | 42302.34 | 41729.12 | −0.25 | Pass-through |
+| 1 | A-Block | 42220.48 | 41821.66 | −1.32 | ✅ 10s |
+| 2 | Hostel Circle | 42194.18 | 41997.10 | +5.48 | ✅ 10s |
+| 3 | CP | 42241.18 | 42075.82 | +8.18 | ✅ 10s |
+| 4 | E-Block | 42365.14 | 42086.45 | +14.44 | ✅ 10s |
+| 5 | WILP-Lab | 42577.55 | 42049.71 | +15.99 | ✅ 10s |
+| 6 | K-Block | 42601.29 | 41917.12 | +6.68 | ✅ 10s |
+| 7 | H-Block | 42532.79 | 41806.83 | +2.69 | ✅ 10s |
+| 8 | I-Block | 42559.08 | 41746.37 | −3.71 | ✅ 10s |
+| 9 | Security (End) | 42314.15 | 41721.62 | −0.20 | Final |
+
+> To modify the route, edit the `WAYPOINTS` list in `shuttle.py`. The dashboard auto-syncs via AST parser on next launch.
 
 ---
 
-## 7. Campus Route Waypoints (UTM Coordinates)
-
-| # | Stop | UTM-X | UTM-Y | Is Stop |
-|---|------|-------|-------|---------|
-| 0 | Security Main Gate | 42302.34 | 41729.12 | ❌ Start |
-| 1 | A-Block | 42220.48 | 41821.66 | ✅ |
-| 2 | Hostel Circle | 42194.18 | 41997.10 | ✅ |
-| 3 | CP (Central Plaza) | 42241.18 | 42075.82 | ✅ |
-| 4 | E-Block | 42365.14 | 42086.45 | ✅ |
-| 5 | WILP-Lab | 42577.55 | 42049.71 | ✅ |
-| 6 | K-Block | 42601.29 | 41917.12 | ✅ |
-| 7 | H-Block | 42532.79 | 41806.83 | ✅ |
-| 8 | I-Block | 42559.08 | 41746.37 | ✅ |
-| 9 | Security (End) | 42314.15 | 41721.62 | ❌ Final |
-
----
-
-## 8. Key v4 Bug Fixes & Optimizations
+## 8. Key Bug Fixes — v4
 
 | Bug | Root Cause | Fix |
 |-----|-----------|-----|
-| Clicking sound at stops | `GearCommand(PARK)` published continuously at 2 Hz; Hooke2 DBW re-actuates on every message | One-shot `_gear_park_sent` flag; gear published **exactly once** per stop leg |
-| Park re-engaging after DRIVE | `_brake_hold_active` flag still `True` during RESUME; timer kept sending PARK overriding DRIVE | Split into two independent flags: `_vel_cap_active` (keepalive needed) and `_gear_park_sent` (one-shot) |
-| Multiple ENGAGE calls | `_brake_hold_active` shared between JUNCTION_STOP and RESUME paths | `_gear_park_sent` is per-leg, reset only in `_advance_to_next_waypoint()` |
-| RESUME_AFTER_STOP never fired | Complex multi-flag dependency; state machine could miss transition | Explicit `elapsed-only` gate for clarity |
-| Speed always 0.00 m/s | Wrong message type; needed `VelocityReport.longitudinal_velocity` | Correct import + `abs()` extraction |
-| Autonomous retry storm | No backoff on failed service calls | Exponential backoff: 1s → 2s → 4s → ... → 16s max |
+| **Clicking sound at every stop** | `GearCommand(PARK)` published at 2 Hz continuously — Hooke2 DBW re-actuates each message | `_gear_park_sent` one-shot flag: gear command sent **exactly once** per stop leg |
+| **Park re-engages after DRIVE** | `_brake_hold_active` flag shared between JUNCTION_STOP and RESUME_AFTER_STOP — timer kept overriding DRIVE with PARK | Split into two independent flags: `_vel_cap_active` (keepalive) + `_gear_park_sent` (one-shot) |
+| **Multiple ENGAGE calls per stop** | Shared flag cleared mid-mission; `_engage_brake_hold()` could re-fire | `_gear_park_sent` reset only in `_advance_to_next_waypoint()` — per-leg guard |
+| **RESUME_AFTER_STOP missed** | Complex multi-flag dependency; state machine could miss transition | Replaced with explicit `elapsed >= threshold` gate |
+| **Speed always 0.00 m/s** | Wrong message type subscribed | Correct `VelocityReport.longitudinal_velocity` + `abs()` |
+| **Autonomous retry storm** | No backoff on service call failures | Exponential backoff: 1 s → 2 s → 4 s → 8 s → 16 s max |
+| **Linux Tcl stack overflow** | 22,000 separate canvas `create_rectangle` calls → Tcl overflow | PIL.Image compositing → single `PhotoImage` blit per render tick |
+| **DDS/X11 segfault on startup** | `rclpy` imported at module level before X11 display socket acquired | All ROS 2 imports delayed inside `ROS2Bridge.start()` method only |
