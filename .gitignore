@@ -6,6 +6,7 @@
 av_ws/build/
 av_ws/install/
 av_ws/log/
+av_ws/maps/
 
 # ── Python Cache & Bytecode ───────────────────────────────────
 __pycache__/
