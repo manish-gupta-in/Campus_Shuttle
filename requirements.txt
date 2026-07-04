@@ -1,0 +1,29 @@
+# ══════════════════════════════════════════════════════════════
+#  Campus_Shuttle — Python Dependencies
+#  Install with: pip3 install -r requirements.txt
+# ══════════════════════════════════════════════════════════════
+
+# Dashboard GUI Framework
+customtkinter>=5.2.0
+
+# Image Processing for Logos and Assets
+Pillow>=9.5.0
+
+# Numerical Computation (pointcloud parsing, coordinate math)
+numpy>=1.24.0
+
+# Optional: Alternative PyQt6 Visualizer Dashboard
+# PyQt6>=6.4.0
+
+# OpenCV (for any image processing extensions)
+# opencv-python>=4.7.0
+
+# ── ROS 2 Dependencies (installed via apt, not pip) ──────────
+# ros-humble-rclpy
+# ros-humble-geometry-msgs
+# ros-humble-std-msgs
+# ros-humble-nav-msgs
+# ros-humble-tf2-ros
+# ros-humble-autoware-vehicle-msgs
+# ros-humble-autoware-planning-msgs
+# ros-humble-autoware-adapi-v1-msgs
